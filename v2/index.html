@@ -6,6 +6,7 @@
   <title>MetaFold Mobile Terminal</title>
   <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
   <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
   <style type="text/tailwindcss">
     .card{@apply bg-white p-4 rounded-2xl border border-slate-200 shadow-sm}
     .big{@apply card w-full text-left p-5 flex items-center justify-between gap-3 active:scale-[0.98] transition}
@@ -99,11 +100,14 @@
           <template v-else>
             <div class="flex justify-between items-center gap-2">
               <label class="block text-xs font-medium text-slate-700">{{ field.label }} <span v-if="field.required" class="text-red-500 font-bold">*</span></label>
-              <button v-if="field.type==='text' || field.type==='textarea'" @click="toggleSpeech(field.key)" type="button"
+              <div class="flex gap-1.5 shrink-0">
+                <button v-if="scanable(field)" @click="openScan(field.key)" type="button" class="text-[11px] px-2.5 py-1 rounded-lg border border-slate-200 bg-slate-100 text-slate-600 font-medium active:scale-95 transition">📷 Scan</button>
+                <button v-if="field.type==='text' || field.type==='textarea'" @click="toggleSpeech(field.key)" type="button"
                 :class="activeSpeechField===field.key ? 'bg-red-500 text-white animate-pulse' : 'bg-slate-100 text-slate-600'"
                 class="text-[11px] px-2.5 py-1 rounded-lg border border-slate-200 font-medium active:scale-95 transition">
                 🎙️ {{ activeSpeechField===field.key ? tr('Hört zu …') : tr('Diktieren') }}
               </button>
+              </div>
             </div>
             <select v-if="field.type==='select'" v-model="formData[field.key]" class="inp">
               <option value="">{{ tr('Auswählen') }} …</option>
@@ -113,6 +117,19 @@
             <label v-else-if="field.type==='checkbox'" class="flex items-center gap-3 p-3 bg-slate-50 border border-slate-300 rounded-xl text-sm">
               <input type="checkbox" v-model="formData[field.key]" class="w-5 h-5"> {{ tr('Ja') }}
             </label>
+            <div v-else-if="field.type==='tags'" class="bg-slate-50 border border-slate-300 rounded-xl p-2 flex flex-wrap gap-1.5 focus-within:ring-2 focus-within:ring-blue-500">
+              <span v-for="(tg,i) in formData[field.key]" :key="tg+i" class="inline-flex items-center gap-1 bg-blue-100 text-blue-800 text-xs font-medium pl-3 pr-1.5 py-1.5 rounded-full">
+                {{ tg }}<button type="button" @click="removeTag(field.key,i)" class="w-5 h-5 rounded-full text-blue-700 leading-none active:bg-blue-200">✕</button>
+              </span>
+              <input type="text" enterkeyhint="done" :placeholder="tr('Tag eingeben, Enter oder Komma')" :value="tagDraft[field.key] || ''" @input="onTagInput(field.key,$event)" @keydown.enter.prevent="commitTag(field.key)" @blur="commitTag(field.key)" class="flex-1 min-w-[9rem] bg-transparent outline-none text-sm p-1.5">
+            </div>
+            <div v-else-if="field.type==='rating'" class="flex items-center gap-0.5">
+              <button v-for="n in 5" :key="n" type="button" @click="setRating(field.key,n)" :class="n <= (formData[field.key]||0) ? 'text-amber-400' : 'text-slate-300'" class="text-4xl leading-none p-1 active:scale-90 transition">★</button>
+              <span class="ml-2 text-xs text-slate-400">{{ formData[field.key] || 0 }} / 5</span>
+            </div>
+            <div v-else-if="field.type==='multicheckbox'" class="flex flex-wrap gap-2">
+              <button v-for="o in field.options" :key="o" type="button" @click="toggleMulti(field.key,o)" :aria-pressed="(formData[field.key]||[]).includes(o)" :class="(formData[field.key]||[]).includes(o) ? 'bg-blue-600 text-white border-blue-600' : 'bg-slate-50 text-slate-700 border-slate-300'" class="px-3.5 py-2 rounded-full border text-sm font-medium active:scale-95 transition">{{ (formData[field.key]||[]).includes(o) ? '✓ ' : '' }}{{ o }}</button>
+            </div>
             <input v-else :type="field.type" v-model="formData[field.key]" class="inp">
             <p v-if="field.description" class="text-[10px] text-slate-400">{{ field.description }}</p>
           </template>
@@ -170,6 +187,16 @@
       <button v-if="step===3" @click="step=4" type="button" class="btn flex-[2] bg-blue-600 text-white">{{ tr('Weiter') }} ›</button>
     </div>
   </nav>
+
+  <!-- Scanner -->
+  <div v-if="scanning" class="fixed inset-0 z-50 bg-black flex flex-col">
+    <video ref="scanVideo" playsinline muted class="flex-1 min-h-0 w-full object-cover"></video>
+    <div class="absolute inset-0 pointer-events-none flex items-center justify-center pb-24"><div class="w-64 h-64 border-4 border-white/80 rounded-3xl"></div></div>
+    <div class="p-4 text-center space-y-3" style="padding-bottom:max(1rem, env(safe-area-inset-bottom))">
+      <p class="text-white text-sm">{{ tr('QR-Code oder Barcode in den Rahmen halten') }}</p>
+      <button @click="stopScan" type="button" class="btn bg-white text-slate-900">{{ tr('Abbrechen') }}</button>
+    </div>
+  </div>
 
   <!-- Einstellungen -->
   <div v-if="showSettings" class="fixed inset-0 z-40 bg-slate-100 overflow-y-auto">
@@ -243,7 +270,7 @@
 </div>
 
 <script>
-const { createApp, ref, computed, watch } = Vue;
+const { createApp, ref, computed, watch, nextTick } = Vue;
 const DEFAULT_LIB = 'https://github.com/ThZobel/MetaFold-Templates';
 const EN = {
  'Kategorie':'Category','Vorlage':'Template','Vorlagen':'Templates','Erfassen':'Record','Senden':'Send',
@@ -266,7 +293,10 @@ const EN = {
  'Fehler':'Error','Fehler beim Senden':'Error while sending','Keine gültige Vorlage gefunden.':'No valid template found.',
  'Spracherkennung erfordert eine sichere Verbindung (HTTPS)!':'Speech recognition requires a secure connection (HTTPS)!',
  'Dieser Browser unterstützt keine direkte Spracherkennung.':'This browser does not support speech recognition.',
- 'Bitte trage in den Einstellungen (⚙️) eine n8n Webhook URL ein.':'Please enter an n8n webhook URL in the settings (⚙️).'
+ 'Bitte trage in den Einstellungen (⚙️) eine n8n Webhook URL ein.':'Please enter an n8n webhook URL in the settings (⚙️).',
+ 'QR-Code oder Barcode in den Rahmen halten':'Hold QR code or barcode inside the frame','Abbrechen':'Cancel',
+ 'Tag eingeben, Enter oder Komma':'Type a tag, Enter or comma','Kamera erfordert HTTPS und Browser-Unterstützung.':'Camera requires HTTPS and browser support.',
+ 'Kamera nicht verfügbar':'Camera not available','Vorlagen wurden aktualisiert – bitte neu laden.':'Templates were updated – please reload them.'
 }
 
 // Weitere Integrationen hier ergänzen; n8n führt sie anhand der IDs aus
@@ -304,15 +334,20 @@ const parseTpl = (raw, id, fallback = 'Vorlage') => {
     if (!f || typeof f !== 'object') continue;
     if (f.type === 'group') { fields.push({ key, label: f.label || key, type: 'group' }); continue; }
     const t = f.type;
-    const type = (t === 'dropdown' || t === 'select' || Array.isArray(f.options)) ? 'select'
+    const type = t === 'multicheckbox' ? 'multicheckbox'
+      : (t === 'tags' || t === 'derived_from') ? 'tags'
+      : t === 'rating' ? 'rating'
+      : (t === 'dropdown' || t === 'select' || Array.isArray(f.options)) ? 'select'
       : t === 'textarea' ? 'textarea' : t === 'checkbox' ? 'checkbox'
       : ['number', 'date', 'time', 'email', 'url'].includes(t) ? t : 'text';
     const dv = f.defaultValue ?? f.value ?? '';
     fields.push({
-      key, label: f.label || key, type,
+      key, label: f.label || key, type, origType: t,
       options: Array.isArray(f.options) ? f.options : [],
       required: !!f.required,
-      defaultValue: type === 'checkbox' ? !!dv : dv,
+      defaultValue: type === 'checkbox' ? !!dv
+        : (type === 'tags' || type === 'multicheckbox') ? (Array.isArray(dv) ? [...dv] : (dv ? [dv] : []))
+        : type === 'rating' ? (Number(dv) || 0) : dv,
       description: f.description || ''
     });
   }
@@ -321,7 +356,8 @@ const parseTpl = (raw, id, fallback = 'Vorlage') => {
     name: raw.name || raw.title || fallback,
     category: prettyCat(raw.category || raw.group),
     description: raw.description || '',
-    fields
+    fields,
+    raw
   };
 };
 
@@ -333,7 +369,9 @@ createApp({
       libraryUrl: localStorage.getItem('metafold_library_url') || DEFAULT_LIB,
       n8nWebhookUrl: localStorage.getItem('metafold_n8n_url') || ''
     });
-    const templates = ref(load('metafold_templates', []));
+    const stored = load('metafold_templates', []);
+    const templates = ref(stored.filter(t => t.raw).map(t => parseTpl(t.raw, t.id, t.name)).filter(Boolean));
+    const droppedTpls = stored.length - templates.value.length;
 
     // Sprache & Integrationen
     const lang = ref(localStorage.getItem('metafold_lang') || ((navigator.language || 'de').startsWith('de') ? 'de' : 'en'));
@@ -370,6 +408,7 @@ createApp({
       clearTimeout(toastTimer);
       toastTimer = setTimeout(() => toast.value = '', 3500);
     };
+    if (droppedTpls) setTimeout(() => flash(tr('Vorlagen wurden aktualisiert – bitte neu laden.'), false), 400);
 
     const categories = computed(() => {
       const m = new Map();
@@ -380,19 +419,30 @@ createApp({
     const currentTemplate = computed(() => templates.value.find(t => t.id === selectedTemplateId.value));
     const fieldTotal = (t) => t.fields.filter(f => f.type !== 'group').length;
 
+    const isEmpty = (v) => v == null || v === '' || v === false || v === 0 || (Array.isArray(v) && !v.length);
     const summaryRows = computed(() => (currentTemplate.value?.fields || [])
       .filter(f => f.type !== 'group')
-      .map(f => { const v = formData.value[f.key]; return { key: f.key, label: f.label, value: f.type === 'checkbox' ? (v ? 'Ja' : '') : v }; })
+      .map(f => {
+        const v = formData.value[f.key];
+        const value = f.type === 'checkbox' ? (v ? tr('Ja') : '')
+          : f.type === 'rating' ? (v ? '★'.repeat(v) + '☆'.repeat(5 - v) : '')
+          : Array.isArray(v) ? v.join(', ') : v;
+        return { key: f.key, label: f.label, value };
+      })
       .filter(r => r.value !== '' && r.value != null));
     const missingRequired = computed(() => (currentTemplate.value?.fields || [])
-      .filter(f => f.required && f.type !== 'group' && ['', null, undefined, false].includes(formData.value[f.key])));
+      .filter(f => f.required && f.type !== 'group' && isEmpty(formData.value[f.key])));
 
     // Navigation
     const canGo = (n) => !sent.value && (n === 1 || (n === 2 && !!selectedCategory.value) || (n >= 3 && !!currentTemplate.value));
     const goStep = (n) => { if (canGo(n)) step.value = n; };
     const initForm = () => {
       formData.value = {};
-      (currentTemplate.value?.fields || []).forEach(f => { if (f.type !== 'group') formData.value[f.key] = f.defaultValue ?? ''; });
+      (currentTemplate.value?.fields || []).forEach(f => {
+        if (f.type === 'group') return;
+        const d = f.defaultValue ?? '';
+        formData.value[f.key] = Array.isArray(d) ? [...d] : d;
+      });
     };
     const pickCategory = (c) => { selectedCategory.value = c; step.value = 2; };
     const pickTemplate = (id) => {
@@ -462,37 +512,126 @@ createApp({
       showSettings.value = false;
     };
 
+    // Tags: Enter oder Komma übernimmt
+    const tagDraft = ref({});
+    const addTags = (key, raw) => {
+      const cur = formData.value[key] || [];
+      String(raw).split(/[,;\n]/).map(x => x.trim()).filter(Boolean).forEach(p => { if (!cur.includes(p)) cur.push(p); });
+      formData.value[key] = cur;
+    };
+    const commitTag = (key) => { addTags(key, tagDraft.value[key] || ''); tagDraft.value[key] = ''; };
+    const onTagInput = (key, e) => {
+      let v = e.target.value;
+      if (/[,;]/.test(v)) {                       // auch für Handy-Tastaturen ohne keydown-Code
+        const parts = v.split(/[,;]/); v = parts.pop();
+        addTags(key, parts.join(','));
+        e.target.value = v;
+      }
+      tagDraft.value[key] = v;
+    };
+    const removeTag = (key, i) => formData.value[key].splice(i, 1);
+    const setRating = (key, n) => { formData.value[key] = formData.value[key] === n ? 0 : n; };
+    const toggleMulti = (key, o) => {
+      const cur = formData.value[key] || [];
+      const i = cur.indexOf(o);
+      if (i >= 0) cur.splice(i, 1); else cur.push(o);
+      formData.value[key] = cur;
+    };
+
+    // Scan (Kamera: QR-Code / Barcode)
+    const scanable = (f) => ['url', 'tags', 'id_anchor', 'derived_from'].includes(f.origType)
+      || (f.type === 'text' && /\b(id|nr|nummer|number|code|barcode|serial|slide|plate|lot|charge|batch|rrid|catalog|katalog)\b/i.test((f.key + ' ' + f.label).replace(/[_\-.]/g, ' ')));
+    const scanning = ref(false);
+    const scanVideo = ref(null);
+    let scanKey = null, scanStream = null, scanRaf = 0;
+    const stopScan = () => {
+      cancelAnimationFrame(scanRaf);
+      scanStream?.getTracks().forEach(t => t.stop());
+      scanStream = null; scanning.value = false;
+    };
+    const applyScan = (val) => {
+      const f = currentTemplate.value?.fields.find(x => x.key === scanKey);
+      if (f?.type === 'tags') addTags(scanKey, val.replace(/,/g, ' ')); else formData.value[scanKey] = val;
+      navigator.vibrate?.(60);
+    };
+    const openScan = async (key) => {
+      if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) { alert(tr('Kamera erfordert HTTPS und Browser-Unterstützung.')); return; }
+      scanKey = key; scanning.value = true;
+      try {
+        scanStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' } }, audio: false });
+        await nextTick();
+        const v = scanVideo.value;
+        v.srcObject = scanStream;
+        await v.play();
+        const det = window.BarcodeDetector ? new BarcodeDetector() : null;   // sonst jsQR (nur QR)
+        const cv = document.createElement('canvas');
+        const cx = cv.getContext('2d', { willReadFrequently: true });
+        let last = 0;
+        const tick = async (ts) => {
+          if (!scanning.value) return;
+          if (ts - last > 150 && v.readyState >= 2) {
+            last = ts;
+            try {
+              let val = '';
+              if (det) { val = (await det.detect(v))[0]?.rawValue || ''; }
+              else if (window.jsQR) {
+                cv.width = v.videoWidth; cv.height = v.videoHeight;
+                cx.drawImage(v, 0, 0);
+                const img = cx.getImageData(0, 0, cv.width, cv.height);
+                val = jsQR(img.data, img.width, img.height)?.data || '';
+              }
+              if (val) { applyScan(val); stopScan(); return; }
+            } catch (_) { /* nächster Frame */ }
+          }
+          scanRaf = requestAnimationFrame(tick);
+        };
+        scanRaf = requestAnimationFrame(tick);
+      } catch (e) { stopScan(); alert(tr('Kamera nicht verfügbar') + ': ' + e.message); }
+    };
+
     // Sprach-Diktat (Web Speech API)
     const activeSpeechField = ref(null);
     let recognition = null;
-    const appendText = (k, text) => {
-      if (k === '__general') generalNote.value = generalNote.value ? `${generalNote.value} ${text}` : text;
-      else formData.value[k] = formData.value[k] ? `${formData.value[k]} ${text}` : text;
-    };
+    const getVal = (k) => k === '__general' ? generalNote.value : (formData.value[k] || '');
+    const setVal = (k, v) => { if (k === '__general') generalNote.value = v; else formData.value[k] = v; };
+    let target = null, keepOn = false, base = '';
     const initSpeech = () => {
       const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
       if (!SR) return null;
       const rec = new SR();
-      rec.lang = 'de-DE';
-      rec.interimResults = false;
+      rec.interimResults = true;
       rec.onresult = (e) => {
-        for (let i = e.resultIndex; i < e.results.length; i++) {
-          if (e.results[i].isFinal && activeSpeechField.value) appendText(activeSpeechField.value, e.results[i][0].transcript.trim());
+        // Immer aus allen Ergebnissen neu aufbauen: bestehender Text + Gesprochenes
+        let fin = '', interim = '';
+        for (let i = 0; i < e.results.length; i++) {
+          const txt = e.results[i][0].transcript.trim();
+          if (e.results[i].isFinal) fin += (fin ? ' ' : '') + txt; else interim += (interim ? ' ' : '') + txt;
         }
+        if (target) setVal(target, [base, fin, interim].filter(Boolean).join(' '));
       };
-      rec.onerror = (e) => { console.error('Sprachfehler:', e.error); activeSpeechField.value = null; };
-      rec.onend = () => { activeSpeechField.value = null; };
+      rec.onerror = (e) => {
+        if (!['no-speech', 'aborted'].includes(e.error)) { console.error('Sprachfehler:', e.error); keepOn = false; }
+      };
+      rec.onend = () => {
+        if (keepOn && target) {           // Sprachnotiz läuft weiter, bis der Nutzer stoppt
+          base = getVal(target);
+          try { rec.start(); return; } catch (_) { /* fällt auf Ende zurück */ }
+        }
+        keepOn = false; target = null; activeSpeechField.value = null;
+      };
       return rec;
     };
     const toggleSpeech = (key) => {
       if (!window.isSecureContext) { alert(tr('Spracherkennung erfordert eine sichere Verbindung (HTTPS)!')); return; }
-      if (activeSpeechField.value === key) { recognition?.stop(); activeSpeechField.value = null; return; }
+      if (activeSpeechField.value) { keepOn = false; recognition?.stop(); return; }  // Stopp: letzter Rest wird noch übernommen
       if (!recognition) recognition = initSpeech();
       if (!recognition) { alert(tr('Dieser Browser unterstützt keine direkte Spracherkennung.')); return; }
       recognition.lang = lang.value === 'en' ? 'en-US' : 'de-DE';
-      recognition.continuous = key === '__general';   // Sprachnotiz darf länger sein
+      recognition.continuous = key === '__general';
+      keepOn = key === '__general';        // nur die Sprachnotiz stoppt nicht von selbst
+      target = key; base = getVal(key);    // vorhandenen Text erweitern statt ersetzen
       activeSpeechField.value = key;
-      try { recognition.start(); } catch (e) { console.warn(e); }
+      try { recognition.start(); } catch (e) { console.warn(e); keepOn = false; target = null; activeSpeechField.value = null; }
     };
 
     // An n8n senden
@@ -528,7 +667,8 @@ createApp({
       canGo, goStep, pickCategory, pickTemplate, resetWizard, hasTemplate, removeTemplate,
       loadLibrary, addFromLibrary, onFiles, openSettings, closeSettings, prettyCat,
       activeSpeechField, toggleSpeech, sendPayload,
-      lang, tr, INTEGRATIONS, enabledIntegrations, activeIntegrations, integrationChoice, integrationOn
+      lang, tr, INTEGRATIONS, enabledIntegrations, activeIntegrations, integrationChoice, integrationOn,
+      tagDraft, onTagInput, commitTag, removeTag, setRating, toggleMulti, scanable, scanning, scanVideo, openScan, stopScan
     };
   }
 }).mount('#app');
