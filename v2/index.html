@@ -1,1 +1,469 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>MetaFold Mobile Terminal</title>
+  <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style type="text/tailwindcss">
+    .card{@apply bg-white p-4 rounded-2xl border border-slate-200 shadow-sm}
+    .big{@apply card w-full text-left p-5 flex items-center justify-between gap-3 active:scale-[0.98] transition}
+    .inp{@apply w-full p-3 bg-slate-50 border border-slate-300 rounded-xl text-sm outline-none focus:ring-2 focus:ring-blue-500}
+    .btn{@apply block w-full py-3.5 rounded-xl font-semibold text-sm text-center active:scale-[0.98] transition cursor-pointer}
+  </style>
+</head>
+<body class="bg-slate-100 text-slate-800 antialiased">
+<div id="app" class="max-w-xl mx-auto min-h-screen">
 
+  <!-- Kopf: klein, mit Fortschritt -->
+  <header class="sticky top-0 z-20 bg-white border-b border-slate-200 px-4 pt-3 pb-2">
+    <div class="flex items-center justify-between">
+      <h1 class="text-base font-bold text-slate-900">MetaFold Terminal</h1>
+      <button @click="openSettings" type="button" aria-label="Einstellungen" class="w-9 h-9 rounded-full bg-slate-100 border border-slate-200 text-base">⚙️</button>
+    </div>
+    <div class="flex gap-2 mt-2.5">
+      <button v-for="(s,i) in stepLabels" :key="s" type="button" @click="goStep(i+1)" :disabled="!canGo(i+1)" class="flex-1 text-left disabled:opacity-40">
+        <div :class="step>i+1 ? 'bg-blue-300' : step===i+1 ? 'bg-blue-600' : 'bg-slate-200'" class="h-1.5 rounded-full"></div>
+        <span :class="step===i+1 ? 'text-blue-700 font-bold' : 'text-slate-500'" class="text-[10px]">{{ i+1 }}. {{ s }}</span>
+      </button>
+    </div>
+  </header>
+
+  <!-- Hinweis-Toast -->
+  <div v-if="toast" :class="toastOk ? 'bg-emerald-600' : 'bg-rose-600'" class="fixed top-20 inset-x-4 max-w-xl mx-auto z-50 text-white text-xs font-medium text-center p-3 rounded-xl shadow-lg">{{ toast }}</div>
+
+  <main class="p-4 pb-32 space-y-3">
+
+    <!-- Schritt 1: Kategorie -->
+    <section v-if="step===1" class="space-y-3">
+      <h2 class="text-lg font-bold">Was möchtest du erfassen?</h2>
+      <p class="text-sm text-slate-500 -mt-2">Kategorie wählen</p>
+
+      <div v-if="!categories.length" class="card text-center space-y-3 p-5">
+        <p class="text-sm text-slate-600">Auf diesem Gerät sind noch keine Vorlagen gespeichert.</p>
+        <button @click="openSettings" type="button" class="btn bg-blue-600 text-white">📚 Aus Bibliothek wählen</button>
+        <label class="btn bg-slate-100 text-slate-700 border border-slate-300">📂 Datei laden
+          <input type="file" accept=".json,application/json" multiple class="hidden" @change="onFiles">
+        </label>
+      </div>
+
+      <button v-for="c in categories" :key="c.name" @click="pickCategory(c.name)" type="button" class="big">
+        <div>
+          <div class="text-base font-semibold">🏷️ {{ c.name }}</div>
+          <div class="text-xs text-slate-500">{{ c.count }} {{ c.count===1 ? 'Vorlage' : 'Vorlagen' }}</div>
+        </div>
+        <span class="text-2xl text-slate-300">›</span>
+      </button>
+    </section>
+
+    <!-- Schritt 2: Vorlage -->
+    <section v-if="step===2" class="space-y-3">
+      <h2 class="text-lg font-bold">{{ selectedCategory }}</h2>
+      <p class="text-sm text-slate-500 -mt-2">Vorlage wählen</p>
+      <button v-for="t in filteredTemplates" :key="t.id" @click="pickTemplate(t.id)" type="button" class="big">
+        <div class="min-w-0">
+          <div class="text-base font-semibold">{{ t.name }}</div>
+          <div v-if="t.description" class="text-xs text-slate-500 mt-0.5">{{ t.description }}</div>
+          <div class="text-[11px] text-slate-400 mt-1">{{ fieldTotal(t) }} Felder</div>
+        </div>
+        <span class="text-2xl text-slate-300">›</span>
+      </button>
+    </section>
+
+    <!-- Schritt 3: Erfassen -->
+    <section v-if="step===3 && currentTemplate" class="space-y-3">
+      <div>
+        <h2 class="text-lg font-bold">{{ currentTemplate.name }}</h2>
+        <p class="text-xs text-slate-500">{{ selectedCategory }}</p>
+      </div>
+
+      <!-- Allgemeine Sprachnotiz -->
+      <div class="bg-blue-50 border border-blue-200 rounded-2xl p-4 space-y-2">
+        <div class="flex items-center justify-between gap-3">
+          <span class="text-sm font-bold text-blue-900">🎙️ Allgemeine Sprachnotiz</span>
+          <button @click="toggleSpeech('__general')" type="button"
+            :class="activeSpeechField==='__general' ? 'bg-red-500 text-white animate-pulse' : 'bg-blue-600 text-white'"
+            class="px-4 py-2.5 rounded-xl text-sm font-semibold active:scale-95 transition">
+            {{ activeSpeechField==='__general' ? '■ Stopp' : '● Aufnehmen' }}
+          </button>
+        </div>
+        <textarea v-model="generalNote" rows="3" class="inp bg-white" placeholder="Frei sprechen oder tippen: Besonderheiten, Probleme, Beobachtungen …"></textarea>
+      </div>
+
+      <div class="card space-y-4">
+        <div v-for="field in currentTemplate.fields" :key="field.key" class="space-y-1.5">
+          <div v-if="field.type==='group'" class="pt-3 pb-1 border-b border-slate-200">
+            <h3 class="text-xs font-bold text-slate-700 uppercase tracking-wider">📁 {{ field.label }}</h3>
+          </div>
+          <template v-else>
+            <div class="flex justify-between items-center gap-2">
+              <label class="block text-xs font-medium text-slate-700">{{ field.label }} <span v-if="field.required" class="text-red-500 font-bold">*</span></label>
+              <button v-if="field.type==='text' || field.type==='textarea'" @click="toggleSpeech(field.key)" type="button"
+                :class="activeSpeechField===field.key ? 'bg-red-500 text-white animate-pulse' : 'bg-slate-100 text-slate-600'"
+                class="text-[11px] px-2.5 py-1 rounded-lg border border-slate-200 font-medium active:scale-95 transition">
+                🎙️ {{ activeSpeechField===field.key ? 'Hört zu …' : 'Diktieren' }}
+              </button>
+            </div>
+            <select v-if="field.type==='select'" v-model="formData[field.key]" class="inp">
+              <option value="">Auswählen …</option>
+              <option v-for="o in field.options" :key="o" :value="o">{{ o }}</option>
+            </select>
+            <textarea v-else-if="field.type==='textarea'" v-model="formData[field.key]" rows="3" class="inp"></textarea>
+            <label v-else-if="field.type==='checkbox'" class="flex items-center gap-3 p-3 bg-slate-50 border border-slate-300 rounded-xl text-sm">
+              <input type="checkbox" v-model="formData[field.key]" class="w-5 h-5"> Ja
+            </label>
+            <input v-else :type="field.type" v-model="formData[field.key]" class="inp">
+            <p v-if="field.description" class="text-[10px] text-slate-400">{{ field.description }}</p>
+          </template>
+        </div>
+      </div>
+    </section>
+
+    <!-- Schritt 4: Prüfen & Senden -->
+    <section v-if="step===4 && currentTemplate" class="space-y-3">
+      <div v-if="sent" class="card text-center space-y-3 p-6">
+        <div class="text-4xl">✅</div>
+        <p class="font-semibold">Erfolgreich übertragen!</p>
+        <button @click="resetWizard" type="button" class="btn bg-blue-600 text-white">Neue Erfassung</button>
+      </div>
+      <template v-else>
+        <div>
+          <h2 class="text-lg font-bold">Prüfen & senden</h2>
+          <p class="text-xs text-slate-500">{{ selectedCategory }} · {{ currentTemplate.name }} · {{ summaryRows.length }} von {{ fieldTotal(currentTemplate) }} Feldern ausgefüllt</p>
+        </div>
+        <div class="card divide-y divide-slate-100">
+          <div v-for="r in summaryRows" :key="r.key" class="py-2 first:pt-0 last:pb-0">
+            <div class="text-[11px] text-slate-400">{{ r.label }}</div>
+            <div class="text-sm break-words">{{ r.value }}</div>
+          </div>
+          <div v-if="generalNote" class="py-2">
+            <div class="text-[11px] text-slate-400">🎙️ Sprachnotiz</div>
+            <div class="text-sm break-words">{{ generalNote }}</div>
+          </div>
+          <p v-if="!summaryRows.length && !generalNote" class="text-sm text-slate-400">Noch nichts erfasst.</p>
+        </div>
+        <div v-if="missingRequired.length" class="bg-amber-50 border border-amber-200 text-amber-900 text-xs rounded-xl p-3 space-y-2">
+          <div>Pflichtfelder fehlen: <b>{{ missingRequired.map(f => f.label).join(', ') }}</b></div>
+          <button @click="step=3" type="button" class="font-semibold underline">Zurück zum Formular</button>
+        </div>
+        <button @click="sendPayload" :disabled="isSubmitting || missingRequired.length>0" type="button" class="btn bg-blue-600 disabled:bg-slate-300 text-white py-4 text-base shadow-md">
+          {{ isSubmitting ? 'Wird übertragen …' : '🚀 Metadaten übertragen' }}
+        </button>
+        <div v-if="sendError" class="bg-rose-50 text-rose-800 border border-rose-200 p-3 rounded-xl text-xs font-medium text-center">{{ sendError }}</div>
+      </template>
+    </section>
+  </main>
+
+  <!-- Navigation unten -->
+  <nav v-if="step>1 && !sent" class="fixed bottom-0 inset-x-0 z-20 bg-white/95 backdrop-blur border-t border-slate-200 p-3" style="padding-bottom:max(0.75rem, env(safe-area-inset-bottom))">
+    <div class="max-w-xl mx-auto flex gap-3">
+      <button @click="step--" type="button" class="btn flex-1 bg-slate-100 text-slate-700">‹ Zurück</button>
+      <button v-if="step===3" @click="step=4" type="button" class="btn flex-[2] bg-blue-600 text-white">Weiter ›</button>
+    </div>
+  </nav>
+
+  <!-- Einstellungen -->
+  <div v-if="showSettings" class="fixed inset-0 z-40 bg-slate-100 overflow-y-auto">
+    <div class="max-w-xl mx-auto p-4 space-y-4 pb-12">
+      <div class="flex items-center justify-between">
+        <h2 class="text-lg font-bold">Einstellungen</h2>
+        <button @click="closeSettings" type="button" class="px-4 py-2 bg-slate-900 text-white rounded-xl text-sm font-semibold">Fertig</button>
+      </div>
+
+      <section class="card space-y-3">
+        <h3 class="font-bold text-sm">📚 Template-Bibliothek</h3>
+        <div>
+          <label class="block text-xs font-semibold text-slate-600 mb-1">GitHub-Repository mit <code>templates-index.json</code></label>
+          <input v-model="config.libraryUrl" type="url" class="inp" placeholder="https://github.com/ThZobel/MetaFold-Templates">
+        </div>
+        <button @click="loadLibrary" type="button" class="btn bg-slate-900 text-white">{{ libLoading ? 'Lade …' : 'Bibliothek laden' }}</button>
+        <p v-if="libError" class="text-xs text-rose-600">{{ libError }}</p>
+        <div v-for="e in library" :key="e.path" class="flex items-center gap-3 p-3 border border-slate-200 rounded-xl">
+          <div class="flex-1 min-w-0">
+            <div class="text-sm font-semibold truncate">{{ e.name }}</div>
+            <div class="text-[11px] text-slate-500">{{ prettyCat(e.category) }} · {{ e.fieldsCount }} Felder</div>
+          </div>
+          <span v-if="hasTemplate(e.path)" class="text-xs px-3 py-2 rounded-lg bg-emerald-100 text-emerald-700 font-semibold">✓ Gespeichert</span>
+          <button v-else @click="addFromLibrary(e)" type="button" class="text-xs px-3 py-2 rounded-lg bg-blue-600 text-white font-semibold">＋ Hinzufügen</button>
+        </div>
+      </section>
+
+      <section class="card space-y-2">
+        <h3 class="font-bold text-sm">📂 Datei laden</h3>
+        <p class="text-xs text-slate-500">MetaFold-Template (.json) von deinem Laufwerk oder Share wählen. Es wird auf diesem Gerät gespeichert.</p>
+        <label class="btn bg-slate-100 text-slate-700 border border-slate-300">JSON-Datei wählen
+          <input type="file" accept=".json,application/json" multiple class="hidden" @change="onFiles">
+        </label>
+      </section>
+
+      <section class="card">
+        <h3 class="font-bold text-sm mb-2">Meine Vorlagen ({{ templates.length }})</h3>
+        <p v-if="!templates.length" class="text-xs text-slate-400">Noch keine gespeichert.</p>
+        <div v-for="t in templates" :key="t.id" class="flex items-center justify-between gap-2 py-2 border-b border-slate-100 last:border-0">
+          <div class="min-w-0">
+            <div class="text-sm truncate">{{ t.name }}</div>
+            <div class="text-[11px] text-slate-400">{{ t.category }}</div>
+          </div>
+          <button @click="removeTemplate(t.id)" type="button" class="text-rose-600 px-3 py-1" aria-label="Entfernen">✕</button>
+        </div>
+      </section>
+
+      <section class="card space-y-2">
+        <h3 class="font-bold text-sm">🔗 n8n Webhook</h3>
+        <input v-model="config.n8nWebhookUrl" type="url" class="inp" placeholder="https://n8n.your-lab.de/webhook/...">
+      </section>
+    </div>
+  </div>
+</div>
+
+<script>
+const { createApp, ref, computed, watch } = Vue;
+const DEFAULT_LIB = 'https://github.com/ThZobel/MetaFold-Templates';
+
+// github.com/owner/repo  ->  raw.githubusercontent.com/owner/repo/main/
+const rawBase = (u) => {
+  u = (u || '').trim();
+  const m = u.match(/github\.com\/([^\/]+)\/([^\/#?]+?)(?:\.git)?(?:\/(?:tree|blob)\/([^\/]+))?\/?$/);
+  return m ? `https://raw.githubusercontent.com/${m[1]}/${m[2]}/${m[3] || 'main'}/` : u.replace(/\/?$/, '/');
+};
+const prettyCat = (c) => /^category\s*\d+$/i.test(c || '') ? c.replace(/category\s*/i, 'Kategorie ') : (c || 'Allgemein');
+
+// MetaFold-Template -> interne Form
+const parseTpl = (raw, id, fallback = 'Vorlage') => {
+  if (!raw || typeof raw !== 'object') return null;
+  let obj = {}, order = [];
+  const mf = raw.metadata && raw.metadata.fields;
+  if (mf && typeof mf === 'object') {
+    obj = mf;
+    order = Array.isArray(raw.metadata.fieldOrder) ? raw.metadata.fieldOrder
+      : Object.keys(mf).sort((a, b) => (mf[a].position ?? 0) - (mf[b].position ?? 0));
+  } else {
+    const list = Array.isArray(raw.fields) ? raw.fields : Array.isArray(raw.variables) ? raw.variables : null;
+    if (list) list.forEach((f, i) => { const k = f.key || f.name || `field_${i}`; obj[k] = f; order.push(k); });
+    else if (raw.fields && typeof raw.fields === 'object') { obj = raw.fields; order = Object.keys(obj); }
+  }
+  const fields = [];
+  for (const key of order) {
+    const f = obj[key];
+    if (!f || typeof f !== 'object') continue;
+    if (f.type === 'group') { fields.push({ key, label: f.label || key, type: 'group' }); continue; }
+    const t = f.type;
+    const type = (t === 'dropdown' || t === 'select' || Array.isArray(f.options)) ? 'select'
+      : t === 'textarea' ? 'textarea' : t === 'checkbox' ? 'checkbox'
+      : ['number', 'date', 'time', 'email', 'url'].includes(t) ? t : 'text';
+    const dv = f.defaultValue ?? f.value ?? '';
+    fields.push({
+      key, label: f.label || key, type,
+      options: Array.isArray(f.options) ? f.options : [],
+      required: !!f.required,
+      defaultValue: type === 'checkbox' ? !!dv : dv,
+      description: f.description || ''
+    });
+  }
+  return {
+    id: id || String(raw.id || raw.name || fallback),
+    name: raw.name || raw.title || fallback,
+    category: prettyCat(raw.category || raw.group),
+    description: raw.description || '',
+    fields
+  };
+};
+
+createApp({
+  setup() {
+    const load = (k, d) => { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } };
+
+    const config = ref({
+      libraryUrl: localStorage.getItem('metafold_library_url') || DEFAULT_LIB,
+      n8nWebhookUrl: localStorage.getItem('metafold_n8n_url') || ''
+    });
+    const templates = ref(load('metafold_templates', []));
+    watch(templates, v => localStorage.setItem('metafold_templates', JSON.stringify(v)), { deep: true });
+
+    // Wizard
+    const stepLabels = ['Kategorie', 'Vorlage', 'Erfassen', 'Senden'];
+    const step = ref(1);
+    const selectedCategory = ref('');
+    const selectedTemplateId = ref('');
+    const formData = ref({});
+    const generalNote = ref('');
+    const sent = ref(false);
+    const isSubmitting = ref(false);
+    const sendError = ref('');
+
+    // Einstellungen / Bibliothek
+    const showSettings = ref(false);
+    const library = ref([]);
+    const libLoading = ref(false);
+    const libError = ref('');
+    const toast = ref('');
+    const toastOk = ref(true);
+    let toastTimer = null;
+    const flash = (msg, ok = true) => {
+      toast.value = msg; toastOk.value = ok;
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => toast.value = '', 3500);
+    };
+
+    const categories = computed(() => {
+      const m = new Map();
+      templates.value.forEach(t => m.set(t.category, (m.get(t.category) || 0) + 1));
+      return [...m].map(([name, count]) => ({ name, count }));
+    });
+    const filteredTemplates = computed(() => templates.value.filter(t => t.category === selectedCategory.value));
+    const currentTemplate = computed(() => templates.value.find(t => t.id === selectedTemplateId.value));
+    const fieldTotal = (t) => t.fields.filter(f => f.type !== 'group').length;
+
+    const summaryRows = computed(() => (currentTemplate.value?.fields || [])
+      .filter(f => f.type !== 'group')
+      .map(f => { const v = formData.value[f.key]; return { key: f.key, label: f.label, value: f.type === 'checkbox' ? (v ? 'Ja' : '') : v }; })
+      .filter(r => r.value !== '' && r.value != null));
+    const missingRequired = computed(() => (currentTemplate.value?.fields || [])
+      .filter(f => f.required && f.type !== 'group' && ['', null, undefined, false].includes(formData.value[f.key])));
+
+    // Navigation
+    const canGo = (n) => !sent.value && (n === 1 || (n === 2 && !!selectedCategory.value) || (n >= 3 && !!currentTemplate.value));
+    const goStep = (n) => { if (canGo(n)) step.value = n; };
+    const initForm = () => {
+      formData.value = {};
+      (currentTemplate.value?.fields || []).forEach(f => { if (f.type !== 'group') formData.value[f.key] = f.defaultValue ?? ''; });
+    };
+    const pickCategory = (c) => { selectedCategory.value = c; step.value = 2; };
+    const pickTemplate = (id) => {
+      const changed = id !== selectedTemplateId.value;
+      selectedTemplateId.value = id;
+      if (changed) initForm();
+      step.value = 3;
+    };
+    const resetWizard = () => {
+      sent.value = false; step.value = 1; selectedCategory.value = ''; selectedTemplateId.value = '';
+      formData.value = {}; generalNote.value = ''; sendError.value = '';
+    };
+
+    // Templates verwalten
+    const upsert = (p) => {
+      const i = templates.value.findIndex(t => t.id === p.id);
+      if (i >= 0) templates.value.splice(i, 1, p); else templates.value.push(p);
+    };
+    const hasTemplate = (id) => templates.value.some(t => t.id === id);
+    const removeTemplate = (id) => {
+      templates.value = templates.value.filter(t => t.id !== id);
+      if (selectedTemplateId.value === id || !categories.value.some(c => c.name === selectedCategory.value)) resetWizard();
+    };
+
+    const loadLibrary = async () => {
+      libLoading.value = true; libError.value = '';
+      try {
+        const res = await fetch(rawBase(config.value.libraryUrl) + 'templates-index.json?t=' + Date.now());
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const data = await res.json();
+        if (!Array.isArray(data) || !data.length) throw new Error('Index leer');
+        library.value = data;
+      } catch (e) {
+        libError.value = `Bibliothek konnte nicht geladen werden (${e.message}).`;
+      } finally { libLoading.value = false; }
+    };
+    const addFromLibrary = async (e) => {
+      try {
+        const res = await fetch(rawBase(config.value.libraryUrl) + e.path);
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const p = parseTpl(await res.json(), e.path, e.name);
+        if (!p) throw new Error('Ungültiges Format');
+        upsert(p);
+        flash(`✓ „${p.name}“ gespeichert`);
+      } catch (err) { flash('Fehler: ' + err.message, false); }
+    };
+    const onFiles = async (ev) => {
+      let n = 0;
+      for (const f of [...ev.target.files]) {
+        try {
+          const raw = JSON.parse(await f.text());
+          const list = Array.isArray(raw) ? raw : [raw];
+          list.forEach((r, i) => {
+            const p = parseTpl(r, 'file:' + f.name + (list.length > 1 ? '#' + i : ''), f.name.replace(/\.json$/i, ''));
+            if (p) { upsert(p); n++; }
+          });
+        } catch (e) { console.warn('Datei übersprungen:', f.name, e); }
+      }
+      ev.target.value = '';
+      n ? flash(`✓ ${n} Vorlage${n > 1 ? 'n' : ''} gespeichert`) : flash('Keine gültige Vorlage gefunden.', false);
+    };
+
+    const openSettings = () => { showSettings.value = true; if (!library.value.length) loadLibrary(); };
+    const closeSettings = () => {
+      localStorage.setItem('metafold_library_url', config.value.libraryUrl);
+      localStorage.setItem('metafold_n8n_url', config.value.n8nWebhookUrl);
+      showSettings.value = false;
+    };
+
+    // Sprach-Diktat (Web Speech API)
+    const activeSpeechField = ref(null);
+    let recognition = null;
+    const appendText = (k, text) => {
+      if (k === '__general') generalNote.value = generalNote.value ? `${generalNote.value} ${text}` : text;
+      else formData.value[k] = formData.value[k] ? `${formData.value[k]} ${text}` : text;
+    };
+    const initSpeech = () => {
+      const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+      if (!SR) return null;
+      const rec = new SR();
+      rec.lang = 'de-DE';
+      rec.interimResults = false;
+      rec.onresult = (e) => {
+        for (let i = e.resultIndex; i < e.results.length; i++) {
+          if (e.results[i].isFinal && activeSpeechField.value) appendText(activeSpeechField.value, e.results[i][0].transcript.trim());
+        }
+      };
+      rec.onerror = (e) => { console.error('Sprachfehler:', e.error); activeSpeechField.value = null; };
+      rec.onend = () => { activeSpeechField.value = null; };
+      return rec;
+    };
+    const toggleSpeech = (key) => {
+      if (!window.isSecureContext) { alert('Spracherkennung erfordert eine sichere Verbindung (HTTPS)!'); return; }
+      if (activeSpeechField.value === key) { recognition?.stop(); activeSpeechField.value = null; return; }
+      if (!recognition) recognition = initSpeech();
+      if (!recognition) { alert('Dieser Browser unterstützt keine direkte Spracherkennung.'); return; }
+      recognition.continuous = key === '__general';   // Sprachnotiz darf länger sein
+      activeSpeechField.value = key;
+      try { recognition.start(); } catch (e) { console.warn(e); }
+    };
+
+    // An n8n senden
+    const sendPayload = async () => {
+      if (!config.value.n8nWebhookUrl) {
+        alert('Bitte trage in den Einstellungen (⚙️) eine n8n Webhook URL ein.');
+        openSettings();
+        return;
+      }
+      isSubmitting.value = true; sendError.value = '';
+      try {
+        const payload = {
+          timestamp: new Date().toISOString(),
+          template: { id: currentTemplate.value.id, name: currentTemplate.value.name, category: currentTemplate.value.category },
+          metadata: formData.value,
+          general_note: generalNote.value
+        };
+        const res = await fetch(config.value.n8nWebhookUrl, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
+        });
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        sent.value = true;
+      } catch (err) {
+        sendError.value = 'Fehler beim Senden: ' + err.message;
+      } finally { isSubmitting.value = false; }
+    };
+
+    return {
+      config, templates, stepLabels, step, selectedCategory, selectedTemplateId, formData, generalNote, sent,
+      isSubmitting, sendError, showSettings, library, libLoading, libError, toast, toastOk,
+      categories, filteredTemplates, currentTemplate, summaryRows, missingRequired, fieldTotal,
+      canGo, goStep, pickCategory, pickTemplate, resetWizard, hasTemplate, removeTemplate,
+      loadLibrary, addFromLibrary, onFiles, openSettings, closeSettings, prettyCat,
+      activeSpeechField, toggleSpeech, sendPayload
+    };
+  }
+}).mount('#app');
+</script>
+</body>
+</html>
