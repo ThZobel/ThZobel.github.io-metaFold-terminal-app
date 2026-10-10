@@ -1,0 +1,616 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>MetaFold Mobile Terminal</title>
+  <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-slate-100 text-slate-800 antialiased p-3 sm:p-6 pb-24">
+  <div id="app" class="max-w-xl mx-auto space-y-5">
+
+    <!-- Header & Config -->
+    <header class="bg-white p-4 sm:p-5 rounded-2xl shadow-sm border border-slate-200">
+      <div class="flex justify-between items-center">
+        <div>
+          <h1 class="text-lg sm:text-xl font-bold text-slate-900 tracking-tight">MetaFold Terminal</h1>
+          <p class="text-xs text-slate-500">Kiosk & Mobile Dispatch</p>
+        </div>
+        <button @click="showConfig = !showConfig" type="button" class="text-xs px-3 py-1.5 bg-slate-100 hover:bg-slate-200 rounded-lg border border-slate-300 font-medium transition">
+          ⚙️ {{ showConfig ? 'Schließen' : 'Setup' }}
+        </button>
+      </div>
+
+      <!-- Setup Drawer -->
+      <div v-if="showConfig" class="mt-4 pt-4 border-t border-slate-100 space-y-3">
+        <div>
+          <label class="block text-xs font-semibold text-slate-600 mb-1">GitHub Template URL (Raw, Blob oder Ordner)</label>
+          <input v-model="config.githubUrl" type="url" class="w-full text-xs p-2.5 rounded-lg border border-slate-300 focus:ring-2 focus:ring-blue-500 outline-none" placeholder="https://raw.githubusercontent.com/.../template.json">
+        </div>
+        <div>
+          <label class="block text-xs font-semibold text-slate-600 mb-1">n8n Webhook URL</label>
+          <input v-model="config.n8nWebhookUrl" type="url" class="w-full text-xs p-2.5 rounded-lg border border-slate-300 focus:ring-2 focus:ring-blue-500 outline-none" placeholder="https://n8n.your-lab.de/webhook/...">
+        </div>
+        <div class="flex flex-wrap gap-2 pt-1">
+          <button @click="saveConfig" type="button" class="text-xs bg-slate-900 text-white px-3 py-1.5 rounded-lg font-medium">Speichern & Laden</button>
+          <button @click="loadMockTemplates" type="button" class="text-xs bg-slate-200 text-slate-700 px-3 py-1.5 rounded-lg">Demo-Daten</button>
+          <button @click="resetCache" type="button" class="text-xs bg-rose-100 text-rose-700 px-3 py-1.5 rounded-lg font-medium">Cache leeren (Reset)</button>
+        </div>
+      </div>
+    </header>
+
+    <!-- 1. Kategorie & Template Auswahl -->
+    <section class="bg-white p-4 sm:p-5 rounded-2xl shadow-sm border border-slate-200 space-y-4">
+      <div class="flex justify-between items-center">
+        <label class="block text-sm font-bold text-slate-800">1. Kategorie & Vorlage</label>
+        <span v-if="templates.length" class="text-[11px] font-medium text-slate-400 bg-slate-100 px-2 py-0.5 rounded-full">
+          {{ templates.length }} {{ templates.length === 1 ? 'Template' : 'Templates' }}
+        </span>
+      </div>
+
+      <!-- Kategorien als Menüpunkte (Tabs / Buttons) -->
+      <div v-if="categories.length > 0" class="space-y-1.5">
+        <span class="block text-[11px] font-semibold text-slate-500 uppercase tracking-wider">Kategorie wählen</span>
+        <div class="flex flex-wrap gap-2">
+          <button 
+            v-for="cat in categories" 
+            :key="cat"
+            @click="selectCategory(cat)"
+            type="button"
+            :class="selectedCategory === cat ? 'bg-blue-600 text-white font-semibold shadow-sm ring-2 ring-blue-300' : 'bg-slate-100 text-slate-700 hover:bg-slate-200 font-medium'"
+            class="px-3 py-2 rounded-xl text-xs transition active:scale-95 flex items-center gap-1.5">
+            <span>🏷️</span>
+            <span>{{ cat }}</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Vorlagenauswahl passend zur Kategorie -->
+      <div class="space-y-1.5">
+        <span class="block text-[11px] font-semibold text-slate-500 uppercase tracking-wider">Vorlage</span>
+        <div v-if="loadingTemplates" class="text-xs text-slate-400 py-2">Lade Daten von GitHub...</div>
+        <select 
+          v-else 
+          v-model="selectedTemplateId" 
+          @change="onTemplateChange" 
+          class="w-full p-3 bg-slate-50 border border-slate-300 rounded-xl text-sm font-medium focus:ring-2 focus:ring-blue-500 outline-none">
+          <option value="" disabled>Bitte Vorlage wählen</option>
+          <option v-for="t in filteredTemplates" :key="t.id" :value="t.id">
+            {{ t.name }}
+          </option>
+        </select>
+      </div>
+
+      <div v-if="currentTemplate && currentTemplate.description" class="text-xs text-slate-500 bg-slate-50 p-2.5 rounded-lg border border-slate-100">
+        {{ currentTemplate.description }}
+      </div>
+    </section>
+
+    <!-- 2. Dynamisches Metadaten-Formular -->
+    <section v-if="currentTemplate" class="bg-white p-4 sm:p-5 rounded-2xl shadow-sm border border-slate-200 space-y-4">
+      <h2 class="text-sm font-bold text-slate-800">2. Metadaten erfassen</h2>
+      
+      <div v-for="field in currentTemplate.fields" :key="field.key" class="space-y-1.5">
+        
+        <!-- Abschnitts-Trennlinie (MetaFold type: 'group') -->
+        <div v-if="field.type === 'group'" class="pt-3 pb-1 border-b border-slate-200">
+          <h3 class="text-xs font-bold text-slate-700 uppercase tracking-wider flex items-center gap-1.5">
+            <span>📁</span> {{ field.label }}
+          </h3>
+        </div>
+
+        <!-- Normale Eingabefelder -->
+        <template v-else>
+          <div class="flex justify-between items-center">
+            <label class="block text-xs font-medium text-slate-700">
+              {{ field.label }} <span v-if="field.required" class="text-red-500 font-bold">*</span>
+            </label>
+            
+            <!-- Diktat-Button direkt am Feld -->
+            <button 
+              type="button" 
+              @click="toggleSpeech(field.key)"
+              :class="activeSpeechField === field.key ? 'bg-red-500 text-white animate-pulse' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'"
+              class="text-[11px] px-2.5 py-1 rounded-lg flex items-center gap-1 transition active:scale-95 font-medium border border-slate-200">
+              <span>🎙️</span>
+              <span>{{ activeSpeechField === field.key ? 'Hört zu...' : 'Diktieren' }}</span>
+            </button>
+          </div>
+          
+          <!-- Dropdown -->
+          <select 
+            v-if="field.type === 'select'" 
+            v-model="formData[field.key]" 
+            class="w-full p-2.5 bg-slate-50 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none">
+            <option value="">Auswählen...</option>
+            <option v-for="opt in field.options" :key="opt" :value="opt">{{ opt }}</option>
+          </select>
+
+          <!-- Textarea -->
+          <textarea 
+            v-else-if="field.type === 'textarea'" 
+            v-model="formData[field.key]" 
+            rows="3" 
+            class="w-full p-2.5 bg-slate-50 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none"></textarea>
+
+          <!-- Standard Text-Input -->
+          <input 
+            v-else 
+            v-model="formData[field.key]" 
+            type="text" 
+            class="w-full p-2.5 bg-slate-50 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none">
+
+          <p v-if="field.description" class="text-[10px] text-slate-400">{{ field.description }}</p>
+        </template>
+      </div>
+    </section>
+
+    <!-- 3. Absenden an n8n -->
+    <section>
+      <button 
+        @click="sendPayload" 
+        :disabled="isSubmitting || !currentTemplate"
+        type="button"
+        class="w-full py-4 bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 text-white rounded-2xl font-semibold shadow-md active:scale-[0.99] transition flex items-center justify-center gap-2">
+        <span v-if="isSubmitting">Wird übertragen...</span>
+        <span v-else>🚀 Metadaten übertragen</span>
+      </button>
+
+      <!-- Status Meldung -->
+      <div v-if="statusMessage" :class="statusSuccess ? 'bg-emerald-50 text-emerald-800 border-emerald-200' : 'bg-rose-50 text-rose-800 border-rose-200'" class="mt-4 p-3.5 rounded-xl border text-xs font-medium text-center">
+        {{ statusMessage }}
+      </div>
+    </section>
+
+  </div>
+
+  <script>
+    const { createApp, ref, computed, onMounted } = Vue;
+
+    createApp({
+      setup() {
+        const showConfig = ref(false);
+        const config = ref({
+          githubUrl: localStorage.getItem('metafold_github_url') || 'https://raw.githubusercontent.com/ThZobel/MetaFold-Templates/main/General/all_fields_template.json',
+          n8nWebhookUrl: localStorage.getItem('metafold_n8n_url') || ''
+        });
+
+        const templates = ref([]);
+        const loadingTemplates = ref(false);
+        const selectedCategory = ref('');
+        const selectedTemplateId = ref('');
+        const formData = ref({});
+
+        // Speech Recognition
+        const activeSpeechField = ref(null);
+        let recognition = null;
+
+        // Submit Status
+        const isSubmitting = ref(false);
+        const statusMessage = ref('');
+        const statusSuccess = ref(true);
+
+        // Dynamische Kategorienliste aus den geladenen Templates
+        const categories = computed(() => {
+          const catSet = new Set();
+          templates.value.forEach(t => {
+            if (t.category) catSet.add(t.category);
+          });
+          return Array.from(catSet);
+        });
+
+        // Templates gefiltert nach der aktuell aktiven Kategorie
+        const filteredTemplates = computed(() => {
+          if (!selectedCategory.value) return templates.value;
+          return templates.value.filter(t => t.category === selectedCategory.value);
+        });
+
+        // Aktuell ausgewähltes Template
+        const currentTemplate = computed(() => {
+          return templates.value.find(t => t.id === selectedTemplateId.value);
+        });
+
+        // MetaFold Template Parser
+        const parseMetaFoldTemplate = (rawData, fallbackName = 'Template') => {
+          if (!rawData || typeof rawData !== 'object') return null;
+
+          // 1. Kategorie ermitteln & formatieren
+          let cat = rawData.category || rawData.group || rawData.type || 'Allgemein';
+          if (/^category\s*\d+$/i.test(cat)) {
+            cat = cat.replace(/category/i, 'Kategorie ');
+          }
+
+          const name = rawData.name || rawData.title || rawData.originalName || fallbackName;
+          const id = String(rawData.id || `tpl_${Math.random().toString(36).substr(2, 9)}`);
+
+          // 2. Felder extrahieren (MetaFold speichert fields oft als Objekt in rawData.metadata.fields)
+          let fieldsObj = {};
+          let fieldOrder = [];
+
+          if (rawData.metadata && rawData.metadata.fields && typeof rawData.metadata.fields === 'object') {
+            fieldsObj = rawData.metadata.fields;
+            fieldOrder = Array.isArray(rawData.metadata.fieldOrder) ? rawData.metadata.fieldOrder : Object.keys(fieldsObj);
+          } else if (rawData.fields) {
+            if (Array.isArray(rawData.fields)) {
+              rawData.fields.forEach((f, i) => {
+                const k = f.key || f.name || `field_${i}`;
+                fieldsObj[k] = f;
+                fieldOrder.push(k);
+              });
+            } else if (typeof rawData.fields === 'object') {
+              fieldsObj = rawData.fields;
+              fieldOrder = Object.keys(fieldsObj);
+            }
+          } else if (Array.isArray(rawData.variables)) {
+            rawData.variables.forEach((f, i) => {
+              const k = f.name || f.key || `field_${i}`;
+              fieldsObj[k] = f;
+              fieldOrder.push(k);
+            });
+          }
+
+          const parsedFields = [];
+          const keys = fieldOrder.length > 0 ? fieldOrder : Object.keys(fieldsObj);
+
+          for (const key of keys) {
+            const f = fieldsObj[key];
+            if (!f || typeof f !== 'object') continue;
+
+            if (f.type === 'group') {
+              parsedFields.push({
+                key: key,
+                label: f.label || key,
+                type: 'group'
+              });
+              continue;
+            }
+
+            const isSelect = f.type === 'dropdown' || f.type === 'select' || Array.isArray(f.options);
+            parsedFields.push({
+              key: key,
+              label: f.label || f.description || key,
+              type: isSelect ? 'select' : (f.type === 'textarea' ? 'textarea' : 'text'),
+              options: Array.isArray(f.options) ? f.options : [],
+              required: Boolean(f.required),
+              defaultValue: f.defaultValue !== undefined ? f.defaultValue : (f.value || ''),
+              description: f.description || ''
+            });
+          }
+
+          return {
+            id,
+            name,
+            category: cat,
+            description: rawData.description || '',
+            fields: parsedFields
+          };
+        };
+
+        // Templates laden
+        const fetchTemplates = async () => {
+          loadingTemplates.value = true;
+          statusMessage.value = '';
+
+          let rawInput = (config.value.githubUrl || '').trim();
+          if (!rawInput) {
+            loadMockTemplates();
+            loadingTemplates.value = false;
+            return;
+          }
+
+          try {
+            // Prüfung: Ordner via GitHub API
+            const treeMatch = rawInput.match(/github\.com\/([^\/]+)\/([^\/]+)\/tree\/([^\/]+)\/(.+)/);
+            if (treeMatch) {
+              const [, owner, repo, branch, folderPath] = treeMatch;
+              const apiUrl = `https://api.github.com/repos/${owner}/${repo}/contents/${folderPath}?ref=${branch}`;
+              const res = await fetch(apiUrl);
+              if (!res.ok) throw new Error(`GitHub API HTTP ${res.status}`);
+              const files = await res.json();
+              const jsonFiles = Array.isArray(files) ? files.filter(f => f.name.endsWith('.json')) : [];
+              if (jsonFiles.length === 0) throw new Error('Keine .json Dateien im Verzeichnis gefunden.');
+
+              const loaded = [];
+              for (const f of jsonFiles) {
+                try {
+                  const fileRes = await fetch(f.download_url);
+                  const data = await fileRes.json();
+                  const parsed = parseMetaFoldTemplate(data, f.name.replace('.json', ''));
+                  if (parsed) loaded.push(parsed);
+                } catch (e) {
+                  console.warn('Datei übersprungen:', f.name, e);
+                }
+              }
+              if (loaded.length === 0) throw new Error('Keine gültigen Templates gefunden.');
+              templates.value = loaded;
+              applySelection();
+              statusSuccess.value = true;
+              statusMessage.value = `✓ ${loaded.length} Vorlagen geladen!`;
+              return;
+            }
+
+            // Prüfung: Einzelne Datei (automatische Raw-Konvertierung)
+            let directUrl = rawInput;
+            if (directUrl.includes('github.com') && !directUrl.includes('raw.githubusercontent.com') && !directUrl.includes('api.github.com')) {
+              directUrl = directUrl
+                .replace('https://github.com/', 'https://raw.githubusercontent.com/')
+                .replace('/blob/', '/');
+            }
+
+            const res = await fetch(directUrl + (directUrl.includes('?') ? '&' : '?') + 't=' + Date.now());
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            const data = await res.json();
+
+            const loaded = [];
+            if (Array.isArray(data)) {
+              data.forEach((item, idx) => {
+                const parsed = parseMetaFoldTemplate(item, `Vorlage_${idx + 1}`);
+                if (parsed) loaded.push(parsed);
+              });
+            } else {
+              const parsed = parseMetaFoldTemplate(data, 'MetaFold Vorlage');
+              if (parsed) loaded.push(parsed);
+            }
+
+            if (loaded.length === 0) throw new Error('Ungültiges Template-Format.');
+            templates.value = loaded;
+            applySelection();
+            statusSuccess.value = true;
+            statusMessage.value = '✓ Template erfolgreich geladen!';
+          } catch (err) {
+            console.error(err);
+            statusSuccess.value = false;
+            statusMessage.value = `Fehler beim Laden (${err.message}). Demo-Modus aktiv.`;
+            loadMockTemplates();
+          } finally {
+            loadingTemplates.value = false;
+          }
+        };
+
+        // Standard-Auswahl setzen
+        const applySelection = () => {
+          if (categories.value.length > 0) {
+            if (!selectedCategory.value || !categories.value.includes(selectedCategory.value)) {
+              selectedCategory.value = categories.value[0];
+            }
+          }
+          const currentFiltered = filteredTemplates.value;
+          if (currentFiltered.length > 0) {
+            const match = currentFiltered.some(t => t.id === selectedTemplateId.value);
+            if (!match) selectedTemplateId.value = currentFiltered[0].id;
+          } else {
+            selectedTemplateId.value = '';
+          }
+          initForm();
+        };
+
+        const selectCategory = (cat) => {
+          selectedCategory.value = cat;
+          const inCat = templates.value.filter(t => t.category === cat);
+          if (inCat.length > 0) {
+            selectedTemplateId.value = inCat[0].id;
+          } else {
+            selectedTemplateId.value = '';
+          }
+          initForm();
+        };
+
+        const onTemplateChange = () => {
+          initForm();
+        };
+
+        // Formular-Felder initialisieren & Default-Werte setzen
+        const initForm = () => {
+          formData.value = {};
+          if (currentTemplate.value) {
+            currentTemplate.value.fields.forEach(f => {
+              if (f.type !== 'group') {
+                formData.value[f.key] = f.defaultValue !== undefined ? f.defaultValue : '';
+              }
+            });
+          }
+        };
+
+        // Fallback / Demo Templates (4 Kategorien)
+        const loadMockTemplates = () => {
+          templates.value = [
+            {
+              id: 'confocal_demo',
+              name: 'Konfokalmikroskopie Session',
+              category: 'Kategorie 1: Mikroskopie',
+              description: 'Standard-Konfokalaufnahme (LSM / Airyscan)',
+              fields: [
+                { type: 'group', label: 'Geräteeinstellungen', key: 'group_acq' },
+                { key: 'mode', label: 'Modus', type: 'select', options: ['Airyscan SR', 'Airyscan Fast', 'LSM Plus'], defaultValue: 'Airyscan SR', required: true },
+                { key: 'laser_lines', label: 'Laser-Linien (nm)', type: 'text', defaultValue: '405, 488, 561', required: false },
+                { type: 'group', label: 'Biologische Probe', key: 'group_sample' },
+                { key: 'sample', label: 'Probenbezeichnung', type: 'text', defaultValue: '', required: true },
+                { key: 'dyes', label: 'Farbstoffe / Fluorophore', type: 'text', defaultValue: 'DAPI, GFP, mCherry', required: false },
+                { key: 'notes', label: 'Notizen / Befund', type: 'textarea', defaultValue: '' }
+              ]
+            },
+            {
+              id: 'screening_demo',
+              name: 'Multiwell Platten-Scan',
+              category: 'Kategorie 2: Screening',
+              description: 'High-Throughput Plattenaufnahme',
+              fields: [
+                { key: 'plate_id', label: 'Plate ID', type: 'text', defaultValue: 'Plate_001', required: true },
+                { key: 'well_format', label: 'Format', type: 'select', options: ['96 Well', '384 Well'], defaultValue: '96 Well', required: true },
+                { key: 'notes', label: 'Notizen', type: 'textarea', defaultValue: '' }
+              ]
+            },
+            {
+              id: 'light_sheet_demo',
+              name: 'Light-Sheet Clearing Experiment',
+              category: 'Kategorie 3: Tissue Clearing',
+              description: 'Geklärte Großproben / Makroaufnahmen',
+              fields: [
+                { key: 'sample_id', label: 'Sample ID', type: 'text', defaultValue: '', required: true },
+                { key: 'clearing_protocol', label: 'Clearing Methode', type: 'select', options: ['uDISCO', 'CUBIC', 'Ce3D'], defaultValue: 'uDISCO', required: true },
+                { key: 'notes', label: 'Besonderheiten', type: 'textarea', defaultValue: '' }
+              ]
+            },
+            {
+              id: 'general_demo',
+              name: 'Standard Laborprojekt',
+              category: 'Kategorie 4: Allgemein',
+              description: 'Allgemeine Metadaten-Erfassung',
+              fields: [
+                { key: 'project_name', label: 'Projektname', type: 'text', defaultValue: '', required: true },
+                { key: 'notes', label: 'Beschreibung', type: 'textarea', defaultValue: '' }
+              ]
+            }
+          ];
+          applySelection();
+        };
+
+        // Sprach-Diktat (Web Speech API)
+        const initSpeechRecognition = () => {
+          const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+          if (!SpeechRecognition) return null;
+
+          const rec = new SpeechRecognition();
+          rec.lang = 'de-DE';
+          rec.continuous = false;
+          rec.interimResults = false;
+
+          rec.onresult = (event) => {
+            const transcript = event.results[0][0].transcript;
+            if (activeSpeechField.value) {
+              const current = formData.value[activeSpeechField.value] || '';
+              formData.value[activeSpeechField.value] = current ? `${current} ${transcript}` : transcript;
+            }
+          };
+
+          rec.onerror = (e) => {
+            console.error('Sprachfehler:', e.error);
+            activeSpeechField.value = null;
+          };
+
+          rec.onend = () => {
+            activeSpeechField.value = null;
+          };
+
+          return rec;
+        };
+
+        const toggleSpeech = (fieldKey) => {
+          if (!window.isSecureContext) {
+            alert('Spracherkennung erfordert eine sichere Verbindung (HTTPS)!');
+            return;
+          }
+
+          if (activeSpeechField.value === fieldKey) {
+            recognition?.stop();
+            activeSpeechField.value = null;
+            return;
+          }
+
+          if (!recognition) recognition = initSpeechRecognition();
+
+          if (!recognition) {
+            alert('Dieser Browser unterstützt keine direkte Spracherkennung.');
+            return;
+          }
+
+          activeSpeechField.value = fieldKey;
+          try {
+            recognition.start();
+          } catch (e) {
+            console.warn(e);
+          }
+        };
+
+        const saveConfig = () => {
+          localStorage.setItem('metafold_github_url', config.value.githubUrl);
+          localStorage.setItem('metafold_n8n_url', config.value.n8nWebhookUrl);
+          showConfig.value = false;
+          fetchTemplates();
+        };
+
+        const resetCache = () => {
+          localStorage.removeItem('metafold_github_url');
+          localStorage.removeItem('metafold_n8n_url');
+          config.value.githubUrl = '';
+          config.value.n8nWebhookUrl = '';
+          loadMockTemplates();
+          showConfig.value = false;
+          statusSuccess.value = true;
+          statusMessage.value = 'Cache geleert und auf Demo-Modus zurückgesetzt.';
+        };
+
+        // Reines JSON an n8n senden
+        const sendPayload = async () => {
+          if (!config.value.n8nWebhookUrl) {
+            alert('Bitte trage im Setup (⚙️) eine n8n Webhook URL ein.');
+            showConfig.value = true;
+            return;
+          }
+
+          isSubmitting.value = true;
+          statusMessage.value = '';
+
+          try {
+            const payload = {
+              timestamp: new Date().toISOString(),
+              template: {
+                id: currentTemplate.value.id,
+                name: currentTemplate.value.name,
+                category: currentTemplate.value.category
+              },
+              metadata: formData.value
+            };
+
+            const res = await fetch(config.value.n8nWebhookUrl, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(payload)
+            });
+
+            if (!res.ok) throw new Error('HTTP ' + res.status);
+
+            statusSuccess.value = true;
+            statusMessage.value = '✓ Erfolgreich übertragen!';
+            initForm();
+          } catch (err) {
+            statusSuccess.value = false;
+            statusMessage.value = 'Fehler beim Senden: ' + err.message;
+          } finally {
+            isSubmitting.value = false;
+          }
+        };
+
+        onMounted(() => {
+          fetchTemplates();
+        });
+
+        return {
+          showConfig,
+          config,
+          templates,
+          categories,
+          selectedCategory,
+          filteredTemplates,
+          selectedTemplateId,
+          currentTemplate,
+          loadingTemplates,
+          formData,
+          activeSpeechField,
+          isSubmitting,
+          statusMessage,
+          statusSuccess,
+          selectCategory,
+          onTemplateChange,
+          saveConfig,
+          resetCache,
+          loadMockTemplates,
+          toggleSpeech,
+          sendPayload
+        };
+      }
+    }).mount('#app');
+  </script>
+</body>
+</html>
